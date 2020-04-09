@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0
 
 #include <linux/module.h>
 #include <linux/init.h>
@@ -64,6 +64,7 @@ out_release:
 	sock_release(socket);
 }
 
+#ifdef USE_NETHOOK
 static unsigned int packet_interceptor(void *priv, struct sk_buff *skb,
 				       const struct nf_hook_state *state)
 {
@@ -111,6 +112,17 @@ static void remove_kern_store(void)
 {
 	nf_unregister_net_hook(&init_net, &hook_ops);
 }
+
+#else
+
+static int init_kern_store(void)
+{
+}
+
+static void remove_kern_store(void)
+{
+}
+#endif
 
 module_init(init_kern_store);
 module_exit(remove_kern_store);
