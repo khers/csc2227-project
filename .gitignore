@@ -1,3 +1,11 @@
+# IDE
+*.creator
+*.creator.user
+kern-store.config
+*.files
+kern-store.includes
+.vscode
+
 # Prerequisites
 *.d
 
