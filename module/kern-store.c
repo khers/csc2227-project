@@ -86,6 +86,16 @@ static int run_server(void *ignored)
 	int size, ret = 0;
 	mm_segment_t old_fs;
 
+	allow_signal(SIGINT);
+	allow_signal(SIGKILL);
+	allow_signal(SIGQUIT);
+	allow_signal(SIGHUP);
+
+	allow_kernel_signal(SIGINT);
+	allow_kernel_signal(SIGKILL);
+	allow_kernel_signal(SIGQUIT);
+	allow_kernel_signal(SIGHUP);
+
 	current->flags |= PF_NOFREEZE;
 
 	for (;;) {
@@ -116,7 +126,7 @@ static int run_server(void *ignored)
 		size = sock_recvmsg(server_state->sock, &msg->hdr, 0);
 		set_fs(old_fs);
 
-		if (!server_state->running) {
+		if (kthread_should_stop() || !server_state->running) {
 			goto out_buf;
 		}
 
@@ -135,6 +145,7 @@ out_buf:
 out_msg:
 	kfree(msg);
 out:
+	flush_signals(current);
 	return ret;
 }
 
@@ -187,6 +198,7 @@ static void remove_kern_store(void)
 	if (server_state) {
 		server_state->running = 0;
 		if (server_state->thread) {
+			send_sig_info(SIGKILL, SEND_SIG_PRIV, server_state->thread);
 			kthread_stop(server_state->thread);
 			msleep(10);
 			server_state->thread = NULL;
