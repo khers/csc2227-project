@@ -20,11 +20,13 @@
 
 #include <kernkv/structures.h>
 
-int init_kernkv(
+int init_kernkv(const char *hostname);
 
 int get(u64 key);
 int put(u64 key, struct value *value);
 int del(u64 key);
+
+void shutdown_kernkv(void);
 
 #endif
 

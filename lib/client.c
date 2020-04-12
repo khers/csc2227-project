@@ -19,11 +19,14 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <stddef.h>
+#include <string.h>
 
 #include <kernkv/kernkv.h>
 #include <kernkv/structures.h>
 
 struct system_state {
+	char *hostname;
 	int socket;
 };
 
@@ -31,25 +34,34 @@ static struct system_state state;
 
 static u64 request_ids;
 
-int init_kernkv()
+int init_kernkv(const char *hostname)
 {
+        state.hostname = strndup(hostname, 253);
+        if (!state.hostname)
+          return -1;
+
 	state.socket = socket(AF_INET, SOCK_DGRAM, 0);
 	if (state.socket < 0)
 		return -1;
+
+	return 0;
 }
 
 static int get_addr(const char *hostname, struct sockaddr_in *addr)
 {
 	struct addrinfo *info;
+	int ret;
 
 	if (!addr)
 		return -1;
 
-	if (getaddrinfo(hostname,
+	if ((ret = getaddrinfo(hostname, NULL, NULL, &info)) != 0) {
+		return ret;
+	}
 
 	addr->sin_family = AF_INET;
 	addr->sin_port = htons(CHAIN_PORT);
-
+	return 0;
 }
 
 int get(u64 key)
