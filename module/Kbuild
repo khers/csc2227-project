@@ -1,0 +1,4 @@
+obj-m := kernkv.o
+
+ccflags-y := -I$(src)/../include
+

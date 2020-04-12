@@ -1,4 +1,4 @@
-/* Copyright (c) 2020 Eric B Munson */
+/* Copyright(c) 2020 Eric B Munson */
 
 /*
  *  This program is free software: you can redistribute it and/or modify
@@ -15,17 +15,16 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef KV_STRUCTURES_H
-#define KV_STRUCTURES_H
+#ifndef KERN_KV_H
+#define KERN_KV_H
 
-enum request_type {
-	KV_GET,
-	KV_PUT,
-	KV_DELETE,
-};
+#include <kernkv/structures.h>
 
-struct kv_request {
-};
+int init_kernkv(
+
+int get(u64 key);
+int put(u64 key, struct value *value);
+int del(u64 key);
 
 #endif
 

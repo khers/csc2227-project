@@ -13,9 +13,7 @@
 #include <linux/kthread.h>
 #include <asm/string.h>
 
-#ifndef CHAIN_PORT
-#define CHAIN_PORT 1345
-#endif
+#include <kernkv/structures.h>
 
 #define MAX_MSG 0xFFFF
 

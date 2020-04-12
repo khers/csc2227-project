@@ -6,13 +6,13 @@ PWD := $(shell pwd)
 .PHONY: build clean
 
 build:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+	$(MAKE) -C $(KERNELDIR) M=$(PWD)
 
 clean:
 	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c
 else
 
 $(info Building with KERNELRELEASE = ${KERNELRELEASE})
-obj-m :=    kern-store.o
+obj-m :=    kernkv.o
 
 endif
