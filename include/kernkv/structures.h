@@ -36,8 +36,12 @@ typedef uint8_t u8;
 #define CHAIN_PORT 1345
 #endif
 
+#ifndef CLIENT_PORT
+#define CLIENT_PORT 1346
+#endif
+
 enum request_type {
-	KV_GET,
+	KV_GET = 1,
 	KV_PUT,
 	KV_DELETE,
 };
@@ -50,9 +54,13 @@ struct delete_request {
 	u64 key;
 };
 
+#define MAX_MSG 0xFFFF
+#define BASE_SIZE (sizeof(u64) + sizeof(enum request_type) + sizeof(u32))
+#define MAX_VALUE (MAX_MSG - (BASE_SIZE + 2 * sizeof(u64)))
+
 struct value {
 	u64 len;
-	u8 *buf;
+	u8 buf[MAX_VALUE];
 };
 
 struct put_request {
@@ -63,6 +71,7 @@ struct put_request {
 struct kv_request {
 	u64 request_id;
 	enum request_type type;
+	u32 client_ip;
 	union {
 		struct get_request get;
 		struct delete_request del;
@@ -70,14 +79,22 @@ struct kv_request {
 	};
 };
 
+
+#define PUT_SIZE(len) (BASE_SIZE + 2 * sizeof(u64) + len)
+#define GET_SIZE (BASE_SIZE + sizeof(struct get_request))
+#define DEL_SIZE (BASE_SIZE + sizeof(struct delete_request))
+
 enum reponse_type {
-	KV_SUCCESS,
+	KV_SUCCESS = 1,
+	KV_NOTFOUND,
 	KV_ERROR,
 };
 
+#define MIN_RESPONSE (sizeof(u64) + sizeof(enum reponse_type) + sizeof(u32))
+
 struct kv_response {
 	u64 request_id;
-	u32 response_code;
+	enum reponse_type type;
 	union {
 		u32 error_code;
 		struct value value;

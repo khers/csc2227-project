@@ -15,8 +15,6 @@
 
 #include <kernkv/structures.h>
 
-#define MAX_MSG 0xFFFF
-
 struct kern_store {
 	struct socket *sock;
 	struct task_struct *thread;
@@ -25,50 +23,252 @@ struct kern_store {
 
 static struct kern_store *server_state;
 
+struct kv_value {
+	struct hlist_node node;
+	u64 key;
+	u64 len;
+	void *value;
+};
+
+#define KV_BITS 16
+
+static DEFINE_HASHTABLE(kv_store, KV_BITS);
+static DEFINE_SRCU(kv_srcu);
+
 struct incoming {
 	struct msghdr hdr;
-	struct sockaddr_in addr;
 	struct kvec vec;
+	struct sockaddr_in addr;
+	size_t recvd;
 };
+
+static size_t handle_get(const struct kv_request *req, struct kv_response **buf)
+{
+	struct kv_value *iter, *value = NULL;
+	u64 key = req->get.key;
+	struct kv_response *resp;
+	size_t ret = 0;
+	int idx = srcu_read_lock(&kv_srcu);
+
+	printk(KERN_INFO "Handling GET\n");
+	hash_for_each_possible_rcu(kv_store, iter, node, key) {
+		if (iter->key == key) {
+			value = iter;
+			break;
+		}
+	}
+
+	if (!value) {
+		resp = kzalloc(MIN_RESPONSE, 0);
+		if (!resp)
+			goto out_unlock;
+		printk(KERN_INFO "Value not found\n");
+		resp->request_id = req->request_id;
+		resp->type = KV_NOTFOUND;
+		ret = MIN_RESPONSE;
+	} else {
+		resp = kzalloc(MIN_RESPONSE + sizeof(u64) + value->len, 0);
+		if (!resp) {
+			printk(KERN_WARNING "Cannot allocate memory to return requested value\n");
+			goto out_unlock;
+		}
+		printk(KERN_INFO "Value found\n");
+		resp->request_id = req->request_id;
+		resp->type = KV_SUCCESS;
+		resp->value.len = value->len;
+		printk(KERN_INFO "Returning value with length %llu and value of the first byte is %d\n",
+				value->len, ((char *)value->value)[0]);
+		memcpy(resp->value.buf, value->value, value->len);
+		ret = MIN_RESPONSE + sizeof(u64) + value->len;
+	}
+
+	*buf = resp;
+out_unlock:
+	srcu_read_unlock(&kv_srcu, idx);
+	return ret;
+}
+
+static size_t handle_put(const struct kv_request *req, struct kv_response **buf)
+{
+	struct kv_value *iter, *value = NULL;
+	u64 key = req->get.key;
+	struct kv_response *resp;
+	void *old_val;
+	int idx;
+	void *new_val = kzalloc(req->put.value.len, 0);
+
+	if (!new_val) {
+		printk(KERN_WARNING "Failed to allocate new value memory\n");
+		return 0;
+	}
+	memcpy(new_val, &(req->put.value.buf), req->put.value.len);
+
+	printk(KERN_INFO "Handling PUT request\n");
+
+	resp = kzalloc(MIN_RESPONSE, 0);
+	if (!resp) {
+		printk(KERN_WARNING "Failed to allocate put response memory\n");
+		kfree(new_val);
+		return 0;
+	}
+
+	resp->request_id = req->request_id;
+	resp->type = KV_ERROR;
+	*buf = resp;
+
+	idx = srcu_read_lock(&kv_srcu);
+	hash_for_each_possible_rcu(kv_store, iter, node, key) {
+		if (iter->key == key) {
+			value = iter;
+			break;
+		}
+	}
+
+	if (value) {
+		old_val = value->value;
+		srcu_read_unlock(&kv_srcu, idx);
+		printk(KERN_INFO "Replacing existing value in hash table\n");
+		synchronize_srcu(&kv_srcu);
+		value->len = req->put.value.len;
+		value->value = new_val;
+		kfree(old_val);
+	} else {
+		srcu_read_unlock(&kv_srcu, idx);
+		value = kzalloc(sizeof(struct value), 0);
+		if (!value) {
+			printk(KERN_WARNING "Failed to allocate new hash node memory\n");
+			kfree(new_val);
+			return MIN_RESPONSE;
+		}
+		printk(KERN_INFO "Inserting new value into hash table\n");
+		value->len = req->put.value.len;
+		value->value = new_val;
+		value->key = key;
+		printk(KERN_INFO "Inserting value with length %llu and value of the first byte is %d\n",
+				value->len, ((char *)value->value)[0]);
+		synchronize_srcu(&kv_srcu);
+		hash_add_rcu(kv_store, &(value->node), key);
+	}
+
+	printk(KERN_INFO "Done\n");
+	resp->type = KV_SUCCESS;
+	return MIN_RESPONSE;
+}
+
+static size_t handle_delete(const struct kv_request *req, struct kv_response **buf)
+{
+	struct kv_value *iter, *value = NULL;
+	u64 key = req->get.key;
+	struct kv_response *resp;
+	size_t ret = 0;
+	int idx = srcu_read_lock(&kv_srcu);
+
+	printk(KERN_INFO "Handling DELETE request\n");
+
+	hash_for_each_possible_rcu(kv_store, iter, node, key) {
+		if (iter->key == key) {
+			value = iter;
+			break;
+		}
+	}
+
+	resp = kzalloc(MIN_RESPONSE, 0);
+	if (!resp)
+		return ret;
+	ret = MIN_RESPONSE;
+	resp->request_id = req->request_id;
+
+	srcu_read_unlock(&kv_srcu, idx);
+
+	if (value) {
+		hash_del_rcu(&(value->node));
+		resp->type = KV_SUCCESS;
+		synchronize_srcu(&kv_srcu);
+		kfree(value->value);
+		kfree(value);
+		printk(KERN_INFO "Value deleted\n");
+	}
+	else {
+		printk(KERN_INFO "Value not found\n");
+		resp->type = KV_NOTFOUND;
+	}
+
+	*buf = resp;
+	printk(KERN_INFO "Done\n");
+	return ret;
+}
 
 static void respond(struct incoming *msg)
 {
 	struct socket *socket;
 	struct msghdr hdr;
 	struct kvec vec;
-	mm_segment_t old_fs;
+	struct kv_request *req;
+	size_t left, written = 0;
+	char *buf = NULL;
 	int ret;
+	mm_segment_t old_fs;
 
-	if (sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &socket))
+	if (!msg->recvd || !msg->vec.iov_len) {
+		printk(KERN_WARNING "Received 0 length request recvd %lu iov_len %lu\n",
+				msg->recvd, msg->vec.iov_len);
 		return;
+	}
+
+	req = (struct kv_request*)msg->vec.iov_base;
+
+	switch (req->type) {
+	case KV_GET:
+		left = handle_get(req, (struct kv_response **)&buf);
+		break;
+	case KV_PUT:
+		left = handle_put(req, (struct kv_response **)&buf);
+		break;
+	case KV_DELETE:
+		left = handle_delete(req, (struct kv_response **)&buf);
+		break;
+	default:
+		printk(KERN_WARNING "Invalid request type %d, valid are {%d, %d, %d}\n", req->type,
+				KV_GET, KV_PUT, KV_DELETE);
+		return;
+	}
+
+	if (sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &socket)) {
+		printk(KERN_WARNING "Failed to create response socket\n");
+		goto out_free;
+	}
+
+	memset(&hdr, 0, sizeof(struct msghdr));
+	msg->addr.sin_port = htons(CLIENT_PORT);
+	msg->addr.sin_addr.s_addr = req->client_ip;
+	hdr.msg_name = &msg->addr;
+	printk(KERN_INFO "Responding to %u\n", msg->addr.sin_addr.s_addr);
+	hdr.msg_namelen = sizeof(struct sockaddr_in);
 
 	if (socket->ops->connect(socket, (struct sockaddr*)&(msg->addr), sizeof(struct sockaddr_in), 0)) {
 		printk(KERN_WARNING "Failed to connect to receiving host\n");
 		goto out_release;
 	}
 
-	memset(&hdr, 0, sizeof(struct msghdr));
-	hdr.msg_name = &(msg->addr);
-	hdr.msg_namelen = sizeof(struct sockaddr_in);
-	hdr.msg_iter.type = ITER_KVEC;
-	hdr.msg_iter.count = 1;
-	hdr.msg_iter.nr_segs = 1;
-	vec.iov_base = kzalloc(9, GFP_NOWAIT);
-	if (!vec.iov_base) {
-		printk(KERN_WARNING "Failed to allocate memory\n");
-		goto out_release;
-	}
-	strcpy(vec.iov_base,"response");
-	vec.iov_len = 9;
-	hdr.msg_iter.kvec = &vec;
-	old_fs = get_fs();
-	set_fs(KERNEL_DS);
-	ret = sock_sendmsg(socket, &hdr);
-	set_fs(old_fs);
-	if (ret < 0) {
-		printk(KERN_WARNING "Failed to send\n");
-		goto out_free;
-	}
+	do {
+		vec.iov_len = left;
+		vec.iov_base = buf + written;
+		printk(KERN_INFO "Sending response\n");
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		ret = kernel_sendmsg(socket, &hdr, &vec, 1, left);
+		set_fs(old_fs);
+
+		if (ret < 0){
+			printk(KERN_WARNING "Failed to send, got error code %d\n", ret);
+			goto out_release;
+		}
+
+		written += ret;
+		left -= ret;
+	} while (left);
+
+	printk(KERN_INFO "Done, sent %lu bytes queued %lu\n", written, vec.iov_len);
 
 out_free:
 	kfree(vec.iov_base);
@@ -82,7 +282,6 @@ static int run_server(void *ignored)
 {
 	struct incoming *msg;
 	int size, ret = 0;
-	mm_segment_t old_fs;
 
 	allow_signal(SIGINT);
 	allow_signal(SIGKILL);
@@ -96,7 +295,7 @@ static int run_server(void *ignored)
 
 	current->flags |= PF_NOFREEZE;
 
-	for (;;) {
+	while (1) {
 		msg = kzalloc(sizeof(struct incoming), 0);
 		if (!msg) {
 			printk(KERN_ERR "Failed to allocate memory for incoming message, ternimating kvvd\n");
@@ -112,17 +311,10 @@ static int run_server(void *ignored)
 			goto out_msg;
 		}
 
-		msg->hdr.msg_name = &msg->addr;
-		msg->hdr.msg_namelen = sizeof(struct sockaddr_in);
-		msg->hdr.msg_iter.type = ITER_KVEC;
-		msg->hdr.msg_iter.count = 1;
-		msg->hdr.msg_iter.kvec = &msg->vec;
-		msg->hdr.msg_iter.nr_segs = 1;
+		printk(KERN_INFO "Waiting on incoming requests\n");
+		size = kernel_recvmsg(server_state->sock, &(msg->hdr), &(msg->vec), 1, MAX_MSG, 0);
 
-		old_fs = get_fs();
-		set_fs(KERNEL_DS);
-		size = sock_recvmsg(server_state->sock, &msg->hdr, 0);
-		set_fs(old_fs);
+		printk(KERN_INFO "Wait interrupted\n");
 
 		if (kthread_should_stop() || !server_state->running) {
 			goto out_buf;
@@ -134,6 +326,10 @@ static int run_server(void *ignored)
 			kfree(msg);
 			continue;
 		}
+
+		printk("Got Message, handling\n");
+
+		msg->recvd = size;
 
 		respond(msg);
 	}
@@ -181,6 +377,8 @@ static int init_kern_store(void)
 		goto out_release;
 	}
 
+	printk(KERN_INFO "KV service started\n");
+
 	return ret;
 
 out_release:
@@ -193,6 +391,10 @@ out_err:
 
 static void remove_kern_store(void)
 {
+	struct kv_value *iter;
+	int bkt;
+	struct hlist_node *tmp;
+
 	if (server_state) {
 		server_state->running = 0;
 		if (server_state->thread) {
@@ -209,6 +411,14 @@ static void remove_kern_store(void)
 
 		kfree(server_state);
 	}
+
+	hash_for_each_safe(kv_store, bkt, tmp, iter, node) {
+		kfree(iter->value);
+		kfree(iter);
+	}
+
+
+	printk(KERN_INFO "KV service stopped\n");
 }
 
 module_init(init_kern_store);

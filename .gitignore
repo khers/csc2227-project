@@ -6,6 +6,9 @@ kern-store.config
 kern-store.includes
 .vscode
 
+# Executables
+test_client
+
 # Prerequisites
 *.d
 
