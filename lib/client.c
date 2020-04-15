@@ -134,6 +134,8 @@ void shutdown_kernkv(void)
 
 	close(state.listen_sock);
 
+	close(state.epfd);
+
 	state.started = 0;
 }
 
