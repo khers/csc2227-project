@@ -26,6 +26,7 @@
 #include <arpa/inet.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <sys/epoll.h>
 
 #include <kernkv/kernkv.h>
 #include <kernkv/structures.h>
@@ -35,6 +36,7 @@ struct system_state {
 	u32 local_ip_net_order;
 	int listen_sock;
 	int started;
+	int epfd;
 };
 
 static struct system_state state;
@@ -64,6 +66,7 @@ int init_kernkv(const char *local_ip, const char *hostname)
 {
 	struct sockaddr_in addr;
 	int err_cache;
+	struct epoll_event event;
 
 	state.hostname = strndup(hostname, 253);
 	if (!state.hostname) {
@@ -95,8 +98,25 @@ int init_kernkv(const char *local_ip, const char *hostname)
 		goto err_close;
 	}
 
+	state.epfd = epoll_create1(0);
+	if (state.epfd < 0) {
+		err_cache = errno;
+		logit("epoll_create1 failed: %s\n", strerror(errno));
+		goto err_close;
+	}
+
+	memset(&event, 0, sizeof(struct epoll_event));
+	event.events = EPOLLIN;
+	if (epoll_ctl(state.epfd, EPOLL_CTL_ADD, state.listen_sock, &event)) {
+		err_cache = errno;
+		logit("epoll_ctl failed: %s\n", strerror(errno));
+		goto err_ep_close;
+	}
+
 	state.started = 1;
 	return 0;
+err_ep_close:
+	close(state.epfd);
 err_close:
 	close(state.listen_sock);
 err_free:
@@ -160,12 +180,30 @@ static int get_address(struct sockaddr_in *addr)
 static inline int get_response(u64 id, struct kv_response *resp)
 {
 	ssize_t ret;
+	struct epoll_event event;
 
 	memset(resp, 0, sizeof(struct kv_response));
+
+	memset(&event, 0, sizeof(struct epoll_event));
+	ret = epoll_wait(state.epfd, &event, 1, RESPONSE_TIMEOUT_MS);
+	if (ret < 0) {
+		logit("epoll_wait returned error: %s\n", strerror(errno));
+		return -1;
+	} else if (ret == 0) {
+		logit("Timeout while waiting for response\n");
+		return -1;
+	}
+
 	ret = recv(state.listen_sock, resp, sizeof (struct kv_response), 0);
 
 	if (ret < (ssize_t)MIN_RESPONSE) {
 		logit("Incoming repose too small: %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (resp->version != STRUCTURES_VERSION) {
+		logit("Version mismatch.  Got %d expected %d\n", resp->version,
+				STRUCTURES_VERSION);
 		return -1;
 	}
 
@@ -199,6 +237,7 @@ int get(u64 key, struct value *buf)
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
+	req.version = STRUCTURES_VERSION;
 	req.request_id = req_id;
 	req.type = KV_GET;
 	req.client_ip = state.local_ip_net_order;
@@ -257,6 +296,7 @@ int put(u64 key, struct value *value)
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
+	req.version = STRUCTURES_VERSION;
 	req.request_id = req_id;
 	req.type = KV_PUT;
 	req.client_ip = state.local_ip_net_order;
@@ -303,6 +343,7 @@ int del(u64 key)
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
+	req.version = STRUCTURES_VERSION;
 	req.request_id = req_id;
 	req.type = KV_DELETE;
 	req.client_ip = state.local_ip_net_order;

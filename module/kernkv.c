@@ -62,6 +62,7 @@ static size_t handle_get(const struct kv_request *req, struct kv_response **buf)
 		resp = kzalloc(MIN_RESPONSE, 0);
 		if (!resp)
 			goto out_unlock;
+		resp->version = STRUCTURES_VERSION;
 		printk(KERN_INFO "Value not found\n");
 		resp->request_id = req->request_id;
 		resp->type = KV_NOTFOUND;
@@ -72,12 +73,10 @@ static size_t handle_get(const struct kv_request *req, struct kv_response **buf)
 			printk(KERN_WARNING "Cannot allocate memory to return requested value\n");
 			goto out_unlock;
 		}
-		printk(KERN_INFO "Value found\n");
+		resp->version = STRUCTURES_VERSION;
 		resp->request_id = req->request_id;
 		resp->type = KV_SUCCESS;
 		resp->value.len = value->len;
-		printk(KERN_INFO "Returning value with length %llu and value of the first byte is %d\n",
-				value->len, ((char *)value->value)[0]);
 		memcpy(resp->value.buf, value->value, value->len);
 		ret = MIN_RESPONSE + sizeof(u64) + value->len;
 	}
@@ -112,6 +111,7 @@ static size_t handle_put(const struct kv_request *req, struct kv_response **buf)
 		return 0;
 	}
 
+	resp->version = STRUCTURES_VERSION;
 	resp->request_id = req->request_id;
 	resp->type = KV_ERROR;
 	*buf = resp;
@@ -175,6 +175,7 @@ static size_t handle_delete(const struct kv_request *req, struct kv_response **b
 	resp = kzalloc(MIN_RESPONSE, 0);
 	if (!resp)
 		return ret;
+	resp->version = STRUCTURES_VERSION;
 	ret = MIN_RESPONSE;
 	resp->request_id = req->request_id;
 
@@ -217,6 +218,12 @@ static void respond(struct incoming *msg)
 
 	req = (struct kv_request*)msg->vec.iov_base;
 
+	if (req->version != STRUCTURES_VERSION) {
+		printk(KERN_ERR "Request version mismatch.  Got %d, expected %d\n",
+				req->version, STRUCTURES_VERSION);
+		return;
+	}
+
 	switch (req->type) {
 	case KV_GET:
 		left = handle_get(req, (struct kv_response **)&buf);
@@ -242,10 +249,10 @@ static void respond(struct incoming *msg)
 	msg->addr.sin_port = htons(CLIENT_PORT);
 	msg->addr.sin_addr.s_addr = req->client_ip;
 	hdr.msg_name = &msg->addr;
-	printk(KERN_INFO "Responding to %u\n", msg->addr.sin_addr.s_addr);
 	hdr.msg_namelen = sizeof(struct sockaddr_in);
 
-	if (socket->ops->connect(socket, (struct sockaddr*)&(msg->addr), sizeof(struct sockaddr_in), 0)) {
+	if (socket->ops->connect(socket, (struct sockaddr*)&(msg->addr),
+				sizeof(struct sockaddr_in), 0)) {
 		printk(KERN_WARNING "Failed to connect to receiving host\n");
 		goto out_release;
 	}

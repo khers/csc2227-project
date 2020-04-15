@@ -32,6 +32,8 @@ typedef uint8_t u8;
 
 #endif
 
+#define STRUCTURES_VERSION 1
+
 #ifndef CHAIN_PORT
 #define CHAIN_PORT 1345
 #endif
@@ -39,6 +41,8 @@ typedef uint8_t u8;
 #ifndef CLIENT_PORT
 #define CLIENT_PORT 1346
 #endif
+
+#define RESPONSE_TIMEOUT_MS 5000
 
 enum request_type {
 	KV_GET = 1,
@@ -55,7 +59,7 @@ struct delete_request {
 };
 
 #define MAX_MSG 0xFFFF
-#define BASE_SIZE (sizeof(u64) + sizeof(enum request_type) + sizeof(u32))
+#define BASE_SIZE (sizeof(u16) + sizeof(u64) + sizeof(enum request_type) + sizeof(u32))
 #define MAX_VALUE (MAX_MSG - (BASE_SIZE + 2 * sizeof(u64)))
 
 struct value {
@@ -69,6 +73,7 @@ struct put_request {
 };
 
 struct kv_request {
+	u16 version;
 	u64 request_id;
 	enum request_type type;
 	u32 client_ip;
@@ -93,6 +98,7 @@ enum reponse_type {
 #define MIN_RESPONSE (sizeof(u64) + sizeof(enum reponse_type) + sizeof(u32))
 
 struct kv_response {
+	u16 version;
 	u64 request_id;
 	enum reponse_type type;
 	union {
