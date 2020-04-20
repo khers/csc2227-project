@@ -9,7 +9,7 @@ build:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD)
 
 clean:
-	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c
+	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c *.a modules.order Module.symvers *.mod
 else
 
 $(info Building with KERNELRELEASE = ${KERNELRELEASE})

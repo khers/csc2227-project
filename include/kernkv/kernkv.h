@@ -20,7 +20,7 @@
 
 #include <kernkv/structures.h>
 
-int init_kernkv(const char *local_ip, const char *hostname);
+int init_kernkv(const char *local_ip, unsigned int num_nodes, u16 chain_length, char **nodes);
 
 int get(u64 key, struct value *value);
 int put(u64 key, struct value *value);

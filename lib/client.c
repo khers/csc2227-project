@@ -32,22 +32,23 @@
 #include <kernkv/structures.h>
 
 struct system_state {
-	char *hostname;
+	u32 *nodes;
 	u32 local_ip_net_order;
 	int listen_sock;
 	int started;
 	int epfd;
+	u16 chain_length;
 };
 
 static struct system_state state;
 
 static u64 request_ids;
 
-static void logit(const char *fmt, ...)
+void logit(const char *fmt, ...)
 {
 	va_list args;
 	va_start(args, fmt);
-	fprintf(stderr, fmt, args);
+	vfprintf(stderr, fmt, args);
 	va_end(args);
 }
 
@@ -55,23 +56,63 @@ static u32 convert_ip(const char *ip)
 {
 	u32 ret = 0;
 	int err = inet_pton(AF_INET, ip, (void*)&ret);
-	/* inet_pton does not follow the "standard" return value pattern and return 1 on success */
+	/* inet_pton does not follow the "standard" return value pattern and instead
+	   returns 1 on success */
 	if (err != 1) {
 		return 0;
 	}
 	return ret;
 }
 
-int init_kernkv(const char *local_ip, const char *hostname)
+static int add_node(const char *ip_str)
+{
+	u32 ip = convert_ip(ip_str);
+	u8 node_id = RING_HASH(ntohl(ip));
+	int checked = 0;
+
+	if (ip == 0) {
+		logit("Failed to convert ip '%s'.  %s\n", ip_str, strerror(errno));
+		return -1;
+	}
+
+	while(state.nodes[node_id] != 0) {
+		node_id = (node_id + 1) % RING_NODES;
+		checked++;
+		if (checked > RING_NODES) {
+			logit("Already have %d nodes in system, cannot add\n", RING_NODES);
+			return -1;
+		}
+	}
+
+	state.nodes[node_id] = ip;
+	return 0;
+}
+
+int init_kernkv(const char *local_ip, unsigned int num_nodes, u16 chain_length, char **nodes)
 {
 	struct sockaddr_in addr;
 	int err_cache;
 	struct epoll_event event;
 
-	state.hostname = strndup(hostname, 253);
-	if (!state.hostname) {
-		logit("Failed to allocate memory for hostname\n");
+	state.chain_length = chain_length;
+
+	if (num_nodes == 0) {
+		logit("Must have at least 1 node in system\n");
 		return -1;
+	}
+
+	state.nodes = malloc(sizeof(u32) * RING_NODES);
+	if (!state.nodes) {
+		logit("Failed to allocate space for nodes array\n");
+		return -1;
+	}
+	memset(state.nodes, 0, sizeof(u32) * RING_NODES);
+
+	for (unsigned int i = 0; i < num_nodes; i++) {
+		if (add_node(nodes[i])) {
+			err_cache = EINVAL;
+			goto err_free;
+		}
 	}
 
 	state.local_ip_net_order = convert_ip(local_ip);
@@ -120,16 +161,16 @@ err_ep_close:
 err_close:
 	close(state.listen_sock);
 err_free:
-	free(state.hostname);
+	free(state.nodes);
 	errno = err_cache;
 	return -1;
 }
 
 void shutdown_kernkv(void)
 {
-	if (state.hostname) {
-		free(state.hostname);
-		state.hostname = NULL;
+	if (state.nodes) {
+		free(state.nodes);
+		state.nodes = NULL;
 	}
 
 	close(state.listen_sock);
@@ -139,44 +180,29 @@ void shutdown_kernkv(void)
 	state.started = 0;
 }
 
-static int resolve_addr(const char *hostname, struct sockaddr_in *addr)
+static int get_address(u64 key, int chain_index, struct sockaddr_in *addr)
 {
-	struct addrinfo *info;
-	struct addrinfo hints;
-	int ret;
+	u8 node_id = RING_HASH(key);
+	int checked = 0;
 
-	if (!addr)
-		return -1;
-
-	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_INET;
-	if ((ret = getaddrinfo(hostname, NULL, &hints, &info)) != 0) {
-		return ret;
+	while (checked < chain_index) {
+		if (state.nodes[node_id] != 0) {
+			checked++;
+			if (checked == chain_index)
+				break;
+		}
+		node_id = (node_id + 1) % RING_NODES;
 	}
 
-	memcpy(&(info->ai_addr), addr, info->ai_addrlen);
+	/* We want the next valid node in the list */
+	while (!state.nodes[node_id])
+		node_id = (node_id + 1) % RING_NODES;
+
+	addr->sin_addr.s_addr = state.nodes[node_id];
 	addr->sin_family = AF_INET;
 	addr->sin_port = htons(CHAIN_PORT);
 
 	return 0;
-}
-
-static int get_address(struct sockaddr_in *addr)
-{
-	u32 ip;
-	int ret = 0;
-
-	if ((ip = convert_ip(state.hostname)) == 0) {
-		if ((ret = resolve_addr(state.hostname, addr)) != 0)
-			return ret;
-		if (addr->sin_addr.s_addr ==0)
-			return 1;
-	} else {
-		addr->sin_addr.s_addr = ip;
-		addr->sin_family = AF_INET;
-		addr->sin_port = htons(CHAIN_PORT);
-	}
-	return ret;
 }
 
 static inline int get_response(u64 id, struct kv_response *resp)
@@ -203,18 +229,18 @@ static inline int get_response(u64 id, struct kv_response *resp)
 		return -1;
 	}
 
-	if (resp->version != STRUCTURES_VERSION) {
-		logit("Version mismatch.  Got %d expected %d\n", resp->version,
+	if (resp->hdr.version != STRUCTURES_VERSION) {
+		logit("Version mismatch.  Got %d expected %d\n", resp->hdr.version,
 				STRUCTURES_VERSION);
 		return -1;
 	}
 
-	if (resp->request_id != id) {
+	if (resp->hdr.request_id != id) {
 		logit("Wrong request id returned\n");
 		return -1;
 	}
 
-	if (resp->type != KV_SUCCESS) {
+	if (resp->hdr.type != KV_VALUE && resp->hdr.type != KV_SUCCESS) {
 		logit("Server returned non-success code\n");
 		return (int)resp->error_code;
 	}
@@ -235,14 +261,16 @@ int get(u64 key, struct value *buf)
 	if (!buf)
 		return -1;
 
-	if ((ret = get_address(&addr)))
+	if ((ret = get_address(key, CHAIN_LENGTH, &addr)))
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
-	req.version = STRUCTURES_VERSION;
-	req.request_id = req_id;
-	req.type = KV_GET;
-	req.client_ip = state.local_ip_net_order;
+	req.hdr.version = STRUCTURES_VERSION;
+	req.hdr.request_id = req_id;
+	req.hdr.type = KV_GET;
+	req.hdr.client_ip = state.local_ip_net_order;
+	req.hdr.hop = 1;
+	req.hdr.length = 1;
 	req.get.key = key;
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -260,7 +288,7 @@ int get(u64 key, struct value *buf)
 
 	ret = sendto(sock, &req, GET_SIZE, 0,
 			(struct sockaddr*)&addr, sizeof(struct sockaddr_in));
-	if (ret < 0 || ret != GET_SIZE) {
+	if (ret < (ssize_t)GET_SIZE) {
 		err_cache = errno;
 		logit("Failed to send GET request: %s\n", strerror(errno));
 		goto out_close;
@@ -294,14 +322,16 @@ int put(u64 key, struct value *value)
 	if (!value || !value->len || value->len > MAX_VALUE)
 		return -1;
 
-	if ((ret = get_address(&addr)))
+	if ((ret = get_address(key, 0, &addr)))
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
-	req.version = STRUCTURES_VERSION;
-	req.request_id = req_id;
-	req.type = KV_PUT;
-	req.client_ip = state.local_ip_net_order;
+	req.hdr.version = STRUCTURES_VERSION;
+	req.hdr.request_id = req_id;
+	req.hdr.type = KV_PUT;
+	req.hdr.client_ip = state.local_ip_net_order;
+	req.hdr.hop = 1;
+	req.hdr.length = state.chain_length;
 	req.put.key = key;
 
 	req.put.value.len = value->len;
@@ -341,14 +371,16 @@ int del(u64 key)
 	int sock;
 	int err_cache;
 
-	if ((ret = get_address(&addr)))
+	if ((ret = get_address(key, 0, &addr)))
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
-	req.version = STRUCTURES_VERSION;
-	req.request_id = req_id;
-	req.type = KV_DELETE;
-	req.client_ip = state.local_ip_net_order;
+	req.hdr.version = STRUCTURES_VERSION;
+	req.hdr.request_id = req_id;
+	req.hdr.type = KV_DELETE;
+	req.hdr.client_ip = state.local_ip_net_order;
+	req.hdr.hop = 1;
+	req.hdr.length = state.chain_length;
 	req.del.key = key;
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -362,7 +394,7 @@ int del(u64 key)
 	}
 
 	ret = send(sock, &req, DEL_SIZE, 0);
-	if (ret < 0 || ret != DEL_SIZE) {
+	if (ret < (ssize_t)DEL_SIZE) {
 		err_cache = errno;
 		goto out_close;
 	}

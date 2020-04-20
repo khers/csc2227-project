@@ -1,4 +1,5 @@
-obj-m := kernkv.o
+obj-m += kernkv.o
+kernkv-objs := kernkv_core.o hashring.o
 
 ccflags-y := -I$(src)/../include
 

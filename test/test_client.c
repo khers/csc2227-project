@@ -16,6 +16,7 @@
  */
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -25,21 +26,52 @@ int main(int argc, char **argv)
 {
 	int ret;
 	struct value value;
+	unsigned int num = 3;
+	/*
+	char **ips;
+	unsigned int i;
+	char *next;
+	*/
+	char *ips[3] = {
+		"192.168.122.254",
+		"192.168.122.95",
+		"192.168.122.124"
+	};
 
-	if (argc < 3) {
-		printf("USAGE %s <local ip for listening> <remote ip>\n", argv[0]);
+	if (argc < 2) {
+		printf("USAGE %s <local ip for listening> <num remote nodes> <ip1,ip2,ip3,...>\n", argv[0]);
 		return -1;
 	}
 
-	ret = init_kernkv(argv[1], argv[2]);
+	/*
+	num = (unsigned int)atoi(argv[2]);
+	ips = malloc(num * sizeof(char *));
+
+	next = ips[0] = argv[3];
+	for (i = 1; i < num; i++) {
+		next = strchr(next, ',');
+		*next = '\0';
+		if (!next) {
+			num = i;
+			break;
+		}
+		next++;
+		ips[i] = next;
+	}
+	*/
+
+	ret = init_kernkv(argv[1], num,	3, (char**)ips);
 	if (ret) {
 		printf("Failed to initialize kernkv: '%s'\n", strerror(errno));
 		return ret;
 	}
 
 	memset(&value, 0, sizeof(struct value));
-	value.len = 1;
-	value.buf[0] = 'a';
+	value.len = 4;
+	value.buf[0] = 0xFF;
+	value.buf[1] = 0xFF;
+	value.buf[2] = 0xFF;
+	value.buf[3] = 0xFF;
 
 	ret = put(1, &value);
 	if (ret) {
@@ -54,8 +86,8 @@ int main(int argc, char **argv)
 		return ret;
 	}
 
-	if (value.buf[0] != 'a') {
-		printf("Got unknown value back %d, should have been %d\n", value.buf[0], 'a');
+	if (value.buf[0] != 0xFF) {
+		printf("Got unknown value back %d, should have been %d\n", value.buf[0], 0XFF);
 		return -1;
 	}
 

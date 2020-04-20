@@ -32,17 +32,31 @@ typedef uint8_t u8;
 
 #endif
 
-#define STRUCTURES_VERSION 1
+#define STRUCTURES_VERSION 2
 
 #ifndef CHAIN_PORT
 #define CHAIN_PORT 1345
 #endif
 
 #ifndef CLIENT_PORT
-#define CLIENT_PORT 1346
+#define CLIENT_PORT 1946
 #endif
 
-#define RESPONSE_TIMEOUT_MS 5000
+#ifndef RESPONSE_TIMEOUT_MS
+#define RESPONSE_TIMEOUT_MS 2000
+#endif
+
+#define CHAIN_LENGTH 2
+
+#ifndef MAX_CHAIN
+#define MAX_CHAIN 10
+#endif
+
+#define MAX_RING_ID (1 << 7)
+
+#define RING_NODES (MAX_RING_ID + 1)
+
+#define RING_HASH(item) (item % RING_NODES)
 
 enum request_type {
 	KV_GET = 1,
@@ -58,8 +72,17 @@ struct delete_request {
 	u64 key;
 };
 
+struct header {
+	u64 request_id;
+	enum request_type type;
+	u32 client_ip;
+	u32 version;
+	u16 hop;
+	u16 length;
+};
+
 #define MAX_MSG 0xFFFF
-#define BASE_SIZE (sizeof(u16) + sizeof(u64) + sizeof(enum request_type) + sizeof(u32))
+#define BASE_SIZE (sizeof(struct header))
 #define MAX_VALUE (MAX_MSG - (BASE_SIZE + 2 * sizeof(u64)))
 
 struct value {
@@ -73,10 +96,7 @@ struct put_request {
 };
 
 struct kv_request {
-	u16 version;
-	u64 request_id;
-	enum request_type type;
-	u32 client_ip;
+	struct header hdr;
 	union {
 		struct get_request get;
 		struct delete_request del;
@@ -91,16 +111,22 @@ struct kv_request {
 
 enum reponse_type {
 	KV_SUCCESS = 1,
+	KV_VALUE,
 	KV_NOTFOUND,
 	KV_ERROR,
 };
 
-#define MIN_RESPONSE (sizeof(u64) + sizeof(enum reponse_type) + sizeof(u32))
+struct resp_hdr {
+	u64 request_id;
+	u32 version;
+	enum reponse_type type;
+};
+
+#define MIN_RESPONSE (sizeof(struct resp_hdr) + sizeof(u32))
+#define VALUE_RESPONSE(len) (sizeof(struct resp_hdr) + sizeof(u64) + len)
 
 struct kv_response {
-	u16 version;
-	u64 request_id;
-	enum reponse_type type;
+	struct resp_hdr hdr;
 	union {
 		u32 error_code;
 		struct value value;

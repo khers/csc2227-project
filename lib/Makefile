@@ -3,7 +3,7 @@ CC	= gcc
 AR	= ar
 LD	= ld
 RANLIB	= ranlib
-CFLAGS       = -O2 -D _DEBUG -std=gnu99 -fPIC -Wall -Wextra -march=native -ggdb3 -I../include
+CFLAGS       = -O0 -D _DEBUG -std=gnu99 -fPIC -Wall -Wextra -march=native -ggdb3 -I../include
 LDFLAGS      = -shared
 
 SHARED  = libkernkv.so
