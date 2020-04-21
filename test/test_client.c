@@ -91,6 +91,8 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	ret = del(1);
+
 	shutdown_kernkv();
 
 	return ret;
