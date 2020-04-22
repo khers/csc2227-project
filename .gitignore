@@ -5,6 +5,11 @@ kern-store.config
 *.files
 kern-store.includes
 .vscode
+KernKV.config
+KernKV.includes
+
+# Benchmark
+memtier_benchmark/
 
 # Executables
 test_client
