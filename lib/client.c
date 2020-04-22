@@ -171,31 +171,12 @@ static int get_address(u64 key, int chain_index, struct sockaddr_in *addr)
 	return 0;
 }
 
-static inline int get_response(u64 id, struct kv_response *resp)
+static inline int get_response(u64 id, int sock, struct kv_response *resp)
 {
 	ssize_t ret;
 	struct epoll_event event[2];
 	int out = -1;
 	int err_cache = 0;
-	struct sockaddr_in addr;
-	int sock;
-
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0) {
-		err_cache = errno;
-		logit("Failed to create incoming socket: %s\n", strerror(errno));
-		return out;
-	}
-
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	addr.sin_port = htons(PORT_FOR_REQ(id));
-	addr.sin_family = AF_INET;
-
-	if (bind(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) == -1) {
-		err_cache = errno;
-		logit("Failed to bind incoming socket: %s\n", strerror(errno));
-		goto close;
-	}
 
 	memset(resp, 0, sizeof(struct kv_response));
 
@@ -255,7 +236,38 @@ close:
 	return out;
 }
 
-static u64 fill_request_header(struct kv_request *req, enum request_type type, u16 length)
+static int setup_response_socket(u64 id)
+{
+	int sock;
+	int err_cache = 0;
+	struct sockaddr_in addr;
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		err_cache = errno;
+		logit("Failed to create incoming socket: %s\n", strerror(errno));
+		errno = err_cache;
+		return -1;
+	}
+
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port = htons(PORT_FOR_REQ(id));
+	addr.sin_family = AF_INET;
+
+	if (bind(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) == -1) {
+		err_cache = errno;
+		logit("Failed to bind incoming socket: %s\n", strerror(errno));
+		goto close;
+	}
+
+	return sock;
+close:
+	close(sock);
+	errno = err_cache;
+	return -1;
+}
+
+static inline u64 fill_request_header(struct kv_request *req, enum request_type type, u16 length)
 {
 	u64 req_id = __sync_fetch_and_add(&request_ids, 1);
 	req->hdr.version = STRUCTURES_VERSION;
@@ -276,6 +288,7 @@ int get(u64 key, struct value *buf)
 	struct kv_response resp;
 	ssize_t ret = 0;
 	int sock;
+	int resp_sock;
 	int err_cache;
 
 	if (!buf)
@@ -288,9 +301,16 @@ int get(u64 key, struct value *buf)
 	req_id = fill_request_header(&req, KV_GET, 1);
 	req.get.key = key;
 
+	resp_sock = setup_response_socket(req_id);
+	if (resp_sock < 0) {
+		logit("Failed to create response socket: %s\n", strerror(errno));
+		return -1;
+	}
+
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sock < 0) {
 		logit("Failed to create socket for GET request: %s\n", strerror(errno));
+		close(resp_sock);
 		return -1;
 	}
 
@@ -309,7 +329,7 @@ int get(u64 key, struct value *buf)
 		goto out_close;
 	}
 
-	ret = get_response(req_id, &resp);
+	ret = get_response(req_id, resp_sock, &resp);
 	if (ret) {
 		err_cache = errno;
 		goto out_close;
@@ -319,6 +339,7 @@ int get(u64 key, struct value *buf)
 	memcpy(buf, &resp.value, sizeof(struct value));
 	return 0;
 out_close:
+	close(resp_sock);
 	close(sock);
 	errno = err_cache;
 	return -1;
@@ -326,12 +347,13 @@ out_close:
 
 int put(u64 key, struct value *value)
 {
-	u64 req_id = __sync_fetch_and_add(&request_ids, 1);
+	u64 req_id;
 	struct kv_request req;
 	struct sockaddr_in addr;
 	struct kv_response resp;
 	ssize_t ret = 0;
 	int sock;
+	int resp_sock;
 	int err_cache;
 
 	if (!value || !value->len || value->len > MAX_VALUE)
@@ -341,20 +363,23 @@ int put(u64 key, struct value *value)
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
-	req.hdr.version = STRUCTURES_VERSION;
-	req.hdr.request_id = req_id;
-	req.hdr.type = KV_PUT;
-	req.hdr.client_ip = state.local_ip_net_order;
-	req.hdr.hop = 1;
-	req.hdr.length = state.chain_length;
+	req_id = fill_request_header(&req, KV_PUT, state.chain_length);
 	req.put.key = key;
+
+	resp_sock = setup_response_socket(req_id);
+	if (resp_sock < 0) {
+		logit("Failed to create response socket: %s\n", strerror(errno));
+		return -1;
+	}
 
 	req.put.value.len = value->len;
 	memcpy((req.put.value.buf), value->buf, value->len);
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0)
+	if (sock < 0) {
+		close(resp_sock);
 		return -1;
+	}
 
 	ret = connect(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
 	if (ret) {
@@ -369,7 +394,7 @@ int put(u64 key, struct value *value)
 	}
 
 	close(sock);
-	return get_response(req_id, &resp);
+	return get_response(req_id, resp_sock, &resp);
 out_close:
 	close(sock);
 	errno = err_cache;
@@ -378,29 +403,33 @@ out_close:
 
 int del(u64 key)
 {
-	u64 req_id = __sync_fetch_and_add(&request_ids, 1);
+	u64 req_id;
 	struct kv_request req;
 	struct sockaddr_in addr;
 	struct kv_response resp;
 	ssize_t ret = 0;
 	int sock;
+	int resp_sock;
 	int err_cache;
 
 	if ((ret = get_address(key, 0, &addr)))
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
-	req.hdr.version = STRUCTURES_VERSION;
-	req.hdr.request_id = req_id;
-	req.hdr.type = KV_DELETE;
-	req.hdr.client_ip = state.local_ip_net_order;
-	req.hdr.hop = 1;
-	req.hdr.length = state.chain_length;
+	req_id = fill_request_header(&req, KV_DELETE, state.chain_length);
 	req.del.key = key;
 
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0)
+	resp_sock = setup_response_socket(req_id);
+	if (resp_sock < 0) {
+		logit("Failed to create response socket: %s\n", strerror(errno));
 		return -1;
+	}
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		close(resp_sock);
+		return -1;
+	}
 
 	ret = connect(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in));
 	if (ret) {
@@ -415,9 +444,10 @@ int del(u64 key)
 	}
 
 	close(sock);
-	return get_response(req_id, &resp);
+	return get_response(req_id, resp_sock, &resp);
 out_close:
 	close(sock);
+	close(resp_sock);
 	errno = err_cache;
 	return -1;
 }
