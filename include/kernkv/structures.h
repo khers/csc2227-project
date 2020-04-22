@@ -32,15 +32,15 @@ typedef uint8_t u8;
 
 #endif
 
-#define STRUCTURES_VERSION 2
+#define STRUCTURES_VERSION 3
 
 #ifndef CHAIN_PORT
 #define CHAIN_PORT 1345
 #endif
 
-#ifndef CLIENT_PORT
-#define CLIENT_PORT 1946
-#endif
+#define CLIENT_PORT_BASE 1346
+#define MAX_PORT ((1 << 16) - 1)
+#define PORT_FOR_REQ(req) (req % (MAX_PORT - CLIENT_PORT_BASE) + CLIENT_PORT_BASE)
 
 #ifndef RESPONSE_TIMEOUT_MS
 #define RESPONSE_TIMEOUT_MS 2000
@@ -76,7 +76,8 @@ struct header {
 	u64 request_id;
 	enum request_type type;
 	u32 client_ip;
-	u32 version;
+	u16 client_port;
+	u16 version;
 	u16 hop;
 	u16 length;
 };

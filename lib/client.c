@@ -34,7 +34,6 @@
 struct system_state {
 	u32 *nodes;
 	u32 local_ip_net_order;
-	int listen_sock;
 	int started;
 	int epfd;
 	u16 chain_length;
@@ -90,9 +89,7 @@ static int add_node(const char *ip_str)
 
 int init_kernkv(const char *local_ip, unsigned int num_nodes, u16 chain_length, char **nodes)
 {
-	struct sockaddr_in addr;
 	int err_cache;
-	struct epoll_event event;
 
 	state.chain_length = chain_length;
 
@@ -122,44 +119,15 @@ int init_kernkv(const char *local_ip, unsigned int num_nodes, u16 chain_length, 
 		goto err_free;
 	}
 
-	state.listen_sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (state.listen_sock < 0) {
-		err_cache = errno;
-		logit("Failed to create incoming socket: %s\n", strerror(errno));
-		goto err_free;
-	}
-
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	addr.sin_port = htons(CLIENT_PORT);
-	addr.sin_family = AF_INET;
-
-	if (bind(state.listen_sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) == -1) {
-		err_cache = errno;
-		logit("Failed to bind incoming socket: %s\n", strerror(errno));
-		goto err_close;
-	}
-
 	state.epfd = epoll_create1(0);
 	if (state.epfd < 0) {
 		err_cache = errno;
 		logit("epoll_create1 failed: %s\n", strerror(errno));
-		goto err_close;
-	}
-
-	memset(&event, 0, sizeof(struct epoll_event));
-	event.events = EPOLLIN;
-	if (epoll_ctl(state.epfd, EPOLL_CTL_ADD, state.listen_sock, &event)) {
-		err_cache = errno;
-		logit("epoll_ctl failed: %s\n", strerror(errno));
-		goto err_ep_close;
+		goto err_free;
 	}
 
 	state.started = 1;
 	return 0;
-err_ep_close:
-	close(state.epfd);
-err_close:
-	close(state.listen_sock);
 err_free:
 	free(state.nodes);
 	errno = err_cache;
@@ -172,8 +140,6 @@ void shutdown_kernkv(void)
 		free(state.nodes);
 		state.nodes = NULL;
 	}
-
-	close(state.listen_sock);
 
 	close(state.epfd);
 
@@ -208,49 +174,103 @@ static int get_address(u64 key, int chain_index, struct sockaddr_in *addr)
 static inline int get_response(u64 id, struct kv_response *resp)
 {
 	ssize_t ret;
-	struct epoll_event event;
+	struct epoll_event event[2];
+	int out = -1;
+	int err_cache = 0;
+	struct sockaddr_in addr;
+	int sock;
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		err_cache = errno;
+		logit("Failed to create incoming socket: %s\n", strerror(errno));
+		return out;
+	}
+
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port = htons(PORT_FOR_REQ(id));
+	addr.sin_family = AF_INET;
+
+	if (bind(sock, (struct sockaddr*)&addr, sizeof(struct sockaddr_in)) == -1) {
+		err_cache = errno;
+		logit("Failed to bind incoming socket: %s\n", strerror(errno));
+		goto close;
+	}
 
 	memset(resp, 0, sizeof(struct kv_response));
 
-	memset(&event, 0, sizeof(struct epoll_event));
-	ret = epoll_wait(state.epfd, &event, 1, RESPONSE_TIMEOUT_MS);
-	if (ret < 0) {
-		logit("epoll_wait returned error: %s\n", strerror(errno));
-		return -1;
-	} else if (ret == 0) {
-		logit("Timeout while waiting for response\n");
-		return -1;
+	memset(&event, 0, 2 * sizeof(struct epoll_event));
+	event[0].events = EPOLLIN;
+	if (epoll_ctl(state.epfd, EPOLL_CTL_ADD, sock, &event[0])) {
+		err_cache = errno;
+		logit("epoll_ctl failed: %s\n", strerror(errno));
+		goto close;
 	}
 
-	ret = recv(state.listen_sock, resp, sizeof (struct kv_response), 0);
+	memset(&event, 0, sizeof(struct epoll_event));
+	while(event[0].data.fd != sock && event[1].data.fd != sock) {
+		ret = epoll_wait(state.epfd, &event[0], 2, RESPONSE_TIMEOUT_MS);
+		if (ret < 0) {
+			logit("epoll_wait returned error: %s\n", strerror(errno));
+			goto remove;
+		} else if (ret == 0) {
+			logit("Timeout while waiting for response\n");
+			goto remove;
+		}
+	}
+
+	ret = recv(sock, resp, sizeof (struct kv_response), 0);
 
 	if (ret < (ssize_t)MIN_RESPONSE) {
 		logit("Incoming repose too small: %s\n", strerror(errno));
-		return -1;
+		goto remove;
 	}
 
 	if (resp->hdr.version != STRUCTURES_VERSION) {
 		logit("Version mismatch.  Got %d expected %d\n", resp->hdr.version,
 				STRUCTURES_VERSION);
-		return -1;
+		goto remove;
 	}
 
 	if (resp->hdr.request_id != id) {
 		logit("Wrong request id returned\n");
-		return -1;
+		goto remove;
 	}
 
 	if (resp->hdr.type != KV_VALUE && resp->hdr.type != KV_SUCCESS) {
 		logit("Server returned non-success code\n");
-		return (int)resp->error_code;
+		out = (int)resp->error_code;
+		goto remove;
 	}
 
-	return 0;
+	out = 0;
+remove:
+	memset(&event, 0, sizeof(struct epoll_event));
+	event[0].events = EPOLLIN;
+	epoll_ctl(state.epfd, EPOLL_CTL_DEL, sock, &event[0]);
+
+close:
+	close(sock);
+	errno = err_cache;
+	return out;
+}
+
+static u64 fill_request_header(struct kv_request *req, enum request_type type, u16 length)
+{
+	u64 req_id = __sync_fetch_and_add(&request_ids, 1);
+	req->hdr.version = STRUCTURES_VERSION;
+	req->hdr.request_id = req_id;
+	req->hdr.type = type;
+	req->hdr.client_ip = state.local_ip_net_order;
+	req->hdr.hop = 1;
+	req->hdr.length = length;
+	req->hdr.client_port = htons(PORT_FOR_REQ(req_id));
+	return req_id;
 }
 
 int get(u64 key, struct value *buf)
 {
-	u64 req_id = __sync_fetch_and_add(&request_ids, 1);
+	u64 req_id;
 	struct kv_request req;
 	struct sockaddr_in addr;
 	struct kv_response resp;
@@ -265,12 +285,7 @@ int get(u64 key, struct value *buf)
 		return -1;
 
 	memset(&req, 0, sizeof(struct kv_request));
-	req.hdr.version = STRUCTURES_VERSION;
-	req.hdr.request_id = req_id;
-	req.hdr.type = KV_GET;
-	req.hdr.client_ip = state.local_ip_net_order;
-	req.hdr.hop = 1;
-	req.hdr.length = 1;
+	req_id = fill_request_header(&req, KV_GET, 1);
 	req.get.key = key;
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);

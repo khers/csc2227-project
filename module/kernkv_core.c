@@ -152,7 +152,7 @@ static int handle_get(const struct kv_request *req)
 	}
 	srcu_read_unlock(&kv_srcu, idx);
 
-	ret = send_to(req->hdr.client_ip, htons(CLIENT_PORT), (char *)resp, send_size);
+	ret = send_to(req->hdr.client_ip, req->hdr.client_port, (char *)resp, send_size);
 	kfree(resp);
 	return ret;
 
@@ -263,7 +263,7 @@ static int handle_put(struct kv_request *req)
 	print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 4, resp, MIN_RESPONSE, 0);
 
 out_respond:
-	ret = send_to(req->hdr.client_ip, htons(CLIENT_PORT), (char *)resp, MIN_RESPONSE);
+	ret = send_to(req->hdr.client_ip, req->hdr.client_port, (char *)resp, MIN_RESPONSE);
 out:
 	kfree(resp);
 	return ret;
@@ -304,7 +304,8 @@ static int handle_delete(struct kv_request *req)
 
 		if (req->hdr.hop != req->hdr.length) {
 			if (forward_chain(req)) {
-				send_to(req->hdr.client_ip, htons(CLIENT_PORT), (char *)resp, MIN_RESPONSE);
+				send_to(req->hdr.client_ip, req->hdr.client_port,
+						(char *)resp, MIN_RESPONSE);
 				goto out;
 			}
 			ret = 0;
@@ -317,7 +318,7 @@ static int handle_delete(struct kv_request *req)
 	}
 
 	resp->hdr.type = KV_SUCCESS;
-	ret = send_to(req->hdr.client_ip, htons(CLIENT_PORT), (char *)resp, MIN_RESPONSE);
+	ret = send_to(req->hdr.client_ip, req->hdr.client_port, (char *)resp, MIN_RESPONSE);
 
 out:
 	kfree(resp);
