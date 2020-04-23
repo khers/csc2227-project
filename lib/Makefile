@@ -20,9 +20,10 @@ INCDIR = $(PREFIX)/include
 all: $(STATIC) $(SHARED)
 
 install: $(STATIC) $(SHARED)
-	install -d $(INCDIR)/kernkv
+	install -d $(LIBDIR) -m 755
+	install -d $(INCDIR)/kernkv -m 755
 	install -t $(LIBDIR) -m0644 $(STATIC) $(SHARED)
-	install -t $(INCDIR) ../include/kernkv/*
+	install -t $(INCDIR)/kernkv ../include/kernkv/*
 	ldconfig
 
 $(SHARED): $(OBJ)
