@@ -14,8 +14,16 @@ DEP = $(OBJ:%.o=%.d)
 
 PREFIX = $(DESTDIR)/usr/local
 BINDIR = $(PREFIX)/bin
+LIBDIR = $(PREFIX)/lib
+INCDIR = $(PREFIX)/include
 
 all: $(STATIC) $(SHARED)
+
+install: $(STATIC) $(SHARED)
+	install -d $(INCDIR)/kernkv
+	install -t $(LIBDIR) -m0644 $(STATIC) $(SHARED)
+	install -t $(INCDIR) ../include/kernkv/*
+	ldconfig
 
 $(SHARED): $(OBJ)
 	$(LD) $(LDFLAGS) -o $@ $^
