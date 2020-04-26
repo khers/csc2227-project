@@ -275,7 +275,7 @@ static inline u64 fill_request_header(struct kv_request *req, enum kv_request_ty
     req->hdr.request_id = req_id;
     req->hdr.type = type;
     req->hdr.client_ip = state.local_ip_net_order;
-    req->hdr.hop = 1;
+    req->hdr.hop = 0;
     req->hdr.length = length;
     req->hdr.client_port = htons(PORT_FOR_REQ(req_id));
     return req_id;
@@ -300,7 +300,7 @@ int kernkv_get(u64 key, struct value *buf)
         return out;
 
     memset(&req, 0, sizeof(struct kv_request));
-    req_id = fill_request_header(&req, KV_GET, 1);
+    req_id = fill_request_header(&req, KV_GET, 0);
     req.get.key = key;
 
     resp_sock = setup_response_socket(req_id);
