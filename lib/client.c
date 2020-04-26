@@ -189,7 +189,7 @@ static inline int get_response(u64 id, int sock, struct kv_response *resp)
         goto close;
     }
 
-    //memset(&event, 0, sizeof(struct epoll_event));
+    memset(&event, 0, sizeof(struct epoll_event));
     while(event.data.fd != sock) {
         ret = epoll_wait(state.epfd, &event, 1, RESPONSE_TIMEOUT_MS);
         if (ret < 0) {
@@ -219,7 +219,7 @@ static inline int get_response(u64 id, int sock, struct kv_response *resp)
         goto remove;
     }
 
-    if (resp->hdr.type != KV_VALUE && resp->hdr.type != KV_SUCCESS) {
+    if (resp->hdr.type == KV_ERROR) {
         logit("Server returned non-success code %d\n", resp->hdr.type);
         out = (int)resp->hdr.type;
         goto remove;
