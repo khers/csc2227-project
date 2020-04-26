@@ -23,7 +23,7 @@ install: $(STATIC) $(SHARED)
 	install -d $(LIBDIR) -m 755
 	install -d $(INCDIR)/kernkv -m 755
 	install -t $(LIBDIR) -m0644 $(STATIC) $(SHARED)
-	install -t $(INCDIR)/kernkv ../include/kernkv/*
+	install -t $(INCDIR)/kernkv -m 0644 ../include/kernkv/*
 	ldconfig
 
 $(SHARED): $(OBJ)

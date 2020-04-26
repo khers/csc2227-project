@@ -58,28 +58,28 @@ typedef uint8_t u8;
 
 #define RING_HASH(item) (item % RING_NODES)
 
-enum request_type {
-	KV_GET = 1,
-	KV_PUT,
-	KV_DELETE,
+enum kv_request_type {
+    KV_GET = 1,
+    KV_PUT,
+    KV_DELETE,
 };
 
 struct get_request {
-	u64 key;
+    u64 key;
 };
 
 struct delete_request {
-	u64 key;
+    u64 key;
 };
 
 struct header {
-	u64 request_id;
-	enum request_type type;
-	u32 client_ip;
-	u16 client_port;
-	u16 version;
-	u16 hop;
-	u16 length;
+    u64 request_id;
+    enum kv_request_type type;
+    u32 client_ip;
+    u16 client_port;
+    u16 version;
+    u16 hop;
+    u16 length;
 };
 
 #define MAX_MSG 0xFFFF
@@ -87,22 +87,22 @@ struct header {
 #define MAX_VALUE (MAX_MSG - (BASE_SIZE + 2 * sizeof(u64)))
 
 struct value {
-	u64 len;
-	u8 buf[MAX_VALUE];
+    u64 len;
+    u8 buf[MAX_VALUE];
 };
 
 struct put_request {
-	u64 key;
-	struct value value;
+    u64 key;
+    struct value value;
 };
 
 struct kv_request {
-	struct header hdr;
-	union {
-		struct get_request get;
-		struct delete_request del;
-		struct put_request put;
-	};
+    struct header hdr;
+    union {
+        struct get_request get;
+        struct delete_request del;
+        struct put_request put;
+    };
 };
 
 
@@ -110,28 +110,28 @@ struct kv_request {
 #define GET_SIZE (BASE_SIZE + sizeof(struct get_request))
 #define DEL_SIZE (BASE_SIZE + sizeof(struct delete_request))
 
-enum reponse_type {
-	KV_SUCCESS = 1,
-	KV_VALUE,
-	KV_NOTFOUND,
-	KV_ERROR,
+enum kv_reponse_type {
+    KV_SUCCESS = 0,
+    KV_VALUE,
+    KV_NOTFOUND,
+    KV_ERROR,
 };
 
 struct resp_hdr {
-	u64 request_id;
-	u32 version;
-	enum reponse_type type;
+    u64 request_id;
+    u32 version;
+    enum kv_reponse_type type;
 };
 
 #define MIN_RESPONSE (sizeof(struct resp_hdr) + sizeof(u32))
 #define VALUE_RESPONSE(len) (sizeof(struct resp_hdr) + sizeof(u64) + len)
 
 struct kv_response {
-	struct resp_hdr hdr;
-	union {
-		u32 error_code;
-		struct value value;
-	};
+    struct resp_hdr hdr;
+    union {
+        u32 error_code;
+        struct value value;
+    };
 };
 
 #endif

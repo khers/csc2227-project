@@ -22,9 +22,9 @@
 
 int init_kernkv(const char *local_ip, unsigned int num_nodes, u16 chain_length, char **nodes);
 
-int get(u64 key, struct value *value);
-int put(u64 key, struct value *value);
-int del(u64 key);
+int kernkv_get(u64 key, struct value *value);
+int kernkv_put(u64 key, struct value *value);
+int kernkv_del(u64 key);
 
 void shutdown_kernkv(void);
 

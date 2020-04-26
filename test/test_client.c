@@ -24,76 +24,76 @@
 
 int main(int argc, char **argv)
 {
-	int ret;
-	struct value value;
-	unsigned int num = 3;
-	/*
-	char **ips;
-	unsigned int i;
-	char *next;
-	*/
-	char *ips[3] = {
-		"192.168.122.254",
-		"192.168.122.95",
-		"192.168.122.124"
-	};
+    int ret;
+    struct value value;
+    unsigned int num = 3;
+    /*
+    char **ips;
+    unsigned int i;
+    char *next;
+    */
+    char *ips[3] = {
+        "192.168.122.254",
+        "192.168.122.95",
+        "192.168.122.124"
+    };
 
-	if (argc < 2) {
-		printf("USAGE %s <local ip for listening> <num remote nodes> <ip1,ip2,ip3,...>\n", argv[0]);
-		return -1;
-	}
+    if (argc < 2) {
+        printf("USAGE %s <local ip for listening> <num remote nodes> <ip1,ip2,ip3,...>\n", argv[0]);
+        return -1;
+    }
 
-	/*
-	num = (unsigned int)atoi(argv[2]);
-	ips = malloc(num * sizeof(char *));
+    /*
+    num = (unsigned int)atoi(argv[2]);
+    ips = malloc(num * sizeof(char *));
 
-	next = ips[0] = argv[3];
-	for (i = 1; i < num; i++) {
-		next = strchr(next, ',');
-		*next = '\0';
-		if (!next) {
-			num = i;
-			break;
-		}
-		next++;
-		ips[i] = next;
-	}
-	*/
+    next = ips[0] = argv[3];
+    for (i = 1; i < num; i++) {
+        next = strchr(next, ',');
+        *next = '\0';
+        if (!next) {
+            num = i;
+            break;
+        }
+        next++;
+        ips[i] = next;
+    }
+    */
 
-	ret = init_kernkv(argv[1], num,	3, (char**)ips);
-	if (ret) {
-		printf("Failed to initialize kernkv: '%s'\n", strerror(errno));
-		return ret;
-	}
+    ret = init_kernkv(argv[1], num,	3, (char**)ips);
+    if (ret) {
+        printf("Failed to initialize kernkv: '%s'\n", strerror(errno));
+        return ret;
+    }
 
-	memset(&value, 0, sizeof(struct value));
-	value.len = 4;
-	value.buf[0] = 0xFF;
-	value.buf[1] = 0xFF;
-	value.buf[2] = 0xFF;
-	value.buf[3] = 0xFF;
+    memset(&value, 0, sizeof(struct value));
+    value.len = 4;
+    value.buf[0] = 0xFF;
+    value.buf[1] = 0xFF;
+    value.buf[2] = 0xFF;
+    value.buf[3] = 0xFF;
 
-	ret = put(1, &value);
-	if (ret) {
-		printf("Failed to send get request: '%s'\n", strerror(errno));
-		return ret;
-	}
+    ret = kernkv_put(1, &value);
+    if (ret) {
+        printf("Failed to send get request: '%s'\n", strerror(errno));
+        return ret;
+    }
 
-	memset(&value, 0, sizeof(struct value));
-	ret = get(1, &value);
-	if (ret) {
-		printf("Failed to send get request: '%s'\n", strerror(errno));
-		return ret;
-	}
+    memset(&value, 0, sizeof(struct value));
+    ret = kernkv_get(1, &value);
+    if (ret) {
+        printf("Failed to send get request: '%s'\n", strerror(errno));
+        return ret;
+    }
 
-	if (value.buf[0] != 0xFF) {
-		printf("Got unknown value back %d, should have been %d\n", value.buf[0], 0XFF);
-		return -1;
-	}
+    if (value.buf[0] != 0xFF) {
+        printf("Got unknown value back %d, should have been %d\n", value.buf[0], 0XFF);
+        return -1;
+    }
 
-	ret = del(1);
+    ret = kernkv_del(1);
 
-	shutdown_kernkv();
+    shutdown_kernkv();
 
-	return ret;
+    return ret;
 }
