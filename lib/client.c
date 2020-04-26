@@ -241,6 +241,7 @@ static int setup_response_socket(u64 id)
 {
     int sock;
     int err_cache = 0;
+    int reuse = 1;
     struct sockaddr_in addr;
 
     sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -249,6 +250,20 @@ static int setup_response_socket(u64 id)
         logit("Failed to create incoming socket: %s\n", strerror(errno));
         errno = err_cache;
         return -1;
+    }
+
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse,
+			    sizeof(reuse)) < 0) {
+        err_cache = errno;
+        logit("setsockopt(SO_REUSEADDR) failed: %s\n", strerror(errno));
+        goto close;
+    }
+
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (const char*)&reuse,
+			    sizeof(reuse)) < 0) {
+        err_cache = errno;
+        perror("setsockopt(SO_REUSEPORT) failed");
+        goto close;
     }
 
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
