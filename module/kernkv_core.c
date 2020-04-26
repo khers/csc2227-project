@@ -12,6 +12,7 @@
 #include <linux/inet.h>
 #include <linux/hashtable.h>
 #include <linux/kthread.h>
+#include <linux/workqueue.h>
 #include <asm/string.h>
 
 #include <kernkv/structures.h>
@@ -31,6 +32,7 @@ module_param(my_ip, charp, 0644);
 struct kern_store {
 	struct socket *sock;
 	struct task_struct *thread;
+	struct workqueue_struct *wq;
 	u32 listen_ip;
 	int running;
 };
@@ -54,6 +56,7 @@ struct incoming {
 	struct kvec vec;
 	struct sockaddr_in addr;
 	size_t recvd;
+	struct work_struct work;
 };
 
 static int send_to(u32 ip, u16 port, char *buf, size_t len)
@@ -312,12 +315,15 @@ out:
 	return ret;
 }
 
-static void respond(struct incoming *msg)
+static void respond(struct work_struct *work)
 {
 	struct kv_request *req;
 	int ret = -1;
+	struct incoming *msg;
 
-	if (!msg->recvd || !msg->vec.iov_len) {
+	msg = container_of(work, struct incoming, work);
+
+	if (!msg || !msg->recvd || !msg->vec.iov_len) {
 		printk(KERN_WARNING "Received 0 length request recvd %lu iov_len %lu\n",
 				msg->recvd, msg->vec.iov_len);
 		return;
@@ -375,7 +381,7 @@ static int run_server(void *ignored)
 	while (1) {
 		msg = kzalloc(sizeof(struct incoming), 0);
 		if (!msg) {
-			printk(KERN_ERR "Failed to allocate memory for incoming message, ternimating kvvd\n");
+			printk(KERN_ERR "Failed to allocate memory for incoming message, terminating kvvd\n");
 			ret = -ENOMEM;
 			goto out;
 		}
@@ -383,10 +389,12 @@ static int run_server(void *ignored)
 		msg->vec.iov_len = MAX_MSG;
 		msg->vec.iov_base = kzalloc(MAX_MSG, 0);
 		if (!msg->vec.iov_base) {
-			printk(KERN_ERR "Failed to allocate memory for incoming buffer, ternimating kvvd\n");
+			printk(KERN_ERR "Failed to allocate memory for incoming buffer, terminating kvvd\n");
 			ret = -ENOMEM;
 			goto out_msg;
 		}
+
+		INIT_WORK(&msg->work, respond);
 
 retry:
 		size = kernel_recvmsg(server_state->sock, &(msg->hdr), &(msg->vec), 1, MAX_MSG, 0);
@@ -402,7 +410,7 @@ retry:
 
 		msg->recvd = size;
 
-		respond(msg);
+		queue_work(server_state->wq, &msg->work);
 	}
 
 out_buf:
@@ -464,18 +472,27 @@ static int init_kern_store(void)
 		goto out_release;
 	}
 
+	server_state->wq = alloc_workqueue("kkvd-responder", WQ_UNBOUND, 0);
+	if (!server_state->wq) {
+		ret = -ENOMEM;
+		printk(KERN_WARNING "Failed to create responder work queue.\n");
+		goto out_release;
+	}
+
 	server_state->running = 1;
 	server_state->thread = kthread_run(run_server, NULL, "kkvd");
 	if (IS_ERR(server_state->thread)) {
 		ret = -ENOMEM;
 		printk(KERN_WARNING "Failed to start kkvd thread.\n");
-		goto out_release;
+		goto work_queue;
 	}
 
 	printk(KERN_INFO "KV service started\n");
 
 	return ret;
 
+work_queue:
+	destroy_workqueue(server_state->wq);
 out_release:
 	sock_release(server_state->sock);
 out_free_state:
@@ -506,6 +523,8 @@ static void remove_kern_store(void)
 			sock_release(server_state->sock);
 			server_state->sock = NULL;
 		}
+
+		destroy_workqueue(server_state->wq);
 
 		kfree(server_state);
 	}
