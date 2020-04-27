@@ -38,7 +38,7 @@ typedef uint8_t u8;
 #define CHAIN_PORT 1345
 #endif
 
-#define CLIENT_PORT_BASE 1346
+#define CLIENT_PORT_BASE 6100
 #define MAX_PORT ((1 << 16) - 1)
 #define PORT_FOR_REQ(req) (req % (MAX_PORT - CLIENT_PORT_BASE) + CLIENT_PORT_BASE)
 
