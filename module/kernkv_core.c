@@ -101,7 +101,6 @@ static int send_to(u32 ip, u16 port, char *buf, size_t len)
 		left -= ret;
 	} while (left);
 
-	printk(KERN_INFO "Done, sent %lu bytes queued %lu\n", written, len);
 	sock_release(sck);
 
 	return 0;
@@ -120,7 +119,6 @@ static int handle_get(const struct kv_request *req)
 	size_t send_size = 0;
 	int idx = srcu_read_lock(&kv_srcu);
 
-	printk(KERN_INFO "Handling GET\n");
 	hash_for_each_possible_rcu(kv_store, iter, node, key) {
 		if (iter->key == key) {
 			value = iter;
@@ -133,7 +131,6 @@ static int handle_get(const struct kv_request *req)
 		if (!resp)
 			goto out_unlock;
 		resp->hdr.version = STRUCTURES_VERSION;
-		printk(KERN_INFO "Value not found\n");
 		resp->hdr.request_id = req->hdr.request_id;
 		resp->hdr.type = KV_NOTFOUND;
 		send_size = MIN_RESPONSE;
@@ -204,8 +201,6 @@ static int handle_put(struct kv_request *req)
 	}
 	memcpy(new_val, &(req->put.value.buf), req->put.value.len);
 
-	printk(KERN_INFO "Handling PUT request\n");
-
 	resp = kzalloc(MIN_RESPONSE, 0);
 	if (!resp) {
 		printk(KERN_WARNING "Failed to allocate put response memory\n");
@@ -227,7 +222,6 @@ static int handle_put(struct kv_request *req)
 
 	if (value) {
 		old_val = value->value;
-		printk(KERN_INFO "Replacing existing value in hash table\n");
 		value->len = req->put.value.len;
 		value->value = new_val;
 		srcu_read_unlock(&kv_srcu, idx);
@@ -241,12 +235,9 @@ static int handle_put(struct kv_request *req)
 			kfree(new_val);
 			goto out_respond;
 		}
-		printk(KERN_INFO "Inserting new value into hash table using buffer %p\n", value);
 		value->len = req->put.value.len;
 		value->value = new_val;
 		value->key = key;
-		printk(KERN_INFO "Inserting value with length %llu and value of the first byte is %d\n",
-				value->len, ((char *)value->value)[0]);
 		synchronize_srcu(&kv_srcu);
 		hash_add_rcu(kv_store, &(value->node), key);
 	}
@@ -277,8 +268,6 @@ static int handle_delete(struct kv_request *req)
 	int ret = -1;
 	int idx = srcu_read_lock(&kv_srcu);
 
-	printk(KERN_INFO "Handling DELETE request\n");
-
 	hash_for_each_possible_rcu(kv_store, iter, node, key) {
 		if (iter->key == key) {
 			value = iter;
@@ -300,7 +289,6 @@ static int handle_delete(struct kv_request *req)
 		synchronize_srcu(&kv_srcu);
 		kfree(value->value);
 		kfree(value);
-		printk(KERN_INFO "Value deleted\n");
 
 		if (req->hdr.hop != req->hdr.length) {
 			if (forward_chain(req)) {
@@ -313,7 +301,6 @@ static int handle_delete(struct kv_request *req)
 		}
 	}
 	else {
-		printk(KERN_INFO "Value not found\n");
 		resp->hdr.type = KV_NOTFOUND;
 	}
 
@@ -401,10 +388,8 @@ static int run_server(void *ignored)
 			goto out_msg;
 		}
 
-		printk(KERN_INFO "Waiting on incoming requests\n");
+retry:
 		size = kernel_recvmsg(server_state->sock, &(msg->hdr), &(msg->vec), 1, MAX_MSG, 0);
-
-		printk(KERN_INFO "Wait interrupted\n");
 
 		if (kthread_should_stop() || !server_state->running) {
 			goto out_buf;
@@ -412,12 +397,8 @@ static int run_server(void *ignored)
 
 		if (size < 0) {
 			printk(KERN_WARNING "Failed to recieve message, skipping\n");
-			kfree(msg->vec.iov_base);
-			kfree(msg);
-			continue;
+			goto retry;
 		}
-
-		printk("Got Message, handling\n");
 
 		msg->recvd = size;
 
